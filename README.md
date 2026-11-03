@@ -116,13 +116,19 @@ The audible "impurity" turned out not to be a noise floor (−88 dB or lower) bu
 jumps at segment seams** — IndexTTS inserts silence between segments and the joins click.
 `example/audio_clean.py` runs on the final waveform:
 
-| Step | Effect (measured on a 20 s sample) |
+| Step | Effect |
 |---|---|
-| de-click (interpolate 3 ms across \|Δsample\| > 0.5) | 130 jumps → **0**, correlation with the original 0.983 |
-| spectral gate (`noisereduce`, `prop_decrease=0.5`) | noise floor ≈ −8 dB lower, correlation 0.98 |
+| high-pass 60 Hz | removes sub-bass rumble (0.7 % of total energy) |
+| pop removal: zero a 1.5 ms core where the local slope exceeds 8× the ±10 ms median, with 0.7 ms cosine ramps | 13 020 spikes in 10 min → short transients drop, RMS −0.15 dB only |
+| seam de-click: 3 ms splice across remaining \|Δsample\| > 0.5 | step discontinuities → 0 |
+| `--pitch -1.5` (optional) | lowers pitch for a more matronly ("御姐") tone |
 
-Both steps run on the CPU and cost no VRAM. Disable with `--denoise 0` (de-click stays on).
-Both `tts_book.py` and `tts_read.py` apply it automatically.
+**Spectral-gate denoising is off by default.** `noisereduce` treated the voice itself as
+noise: RMS fell from −21.3 dB to −25.3 dB and the result sounded hollow. The silence floor is
+already ≈ −93 dB, so there is nothing to denoise. Pass `--denoise 0.3` only for genuinely noisy
+material.
+
+Everything runs on the CPU and costs no VRAM. `tts_book.py` and `tts_read.py` apply it automatically.
 
 ## Measured performance (RTX 5060, 8 GB)
 

@@ -149,7 +149,9 @@ def main():
     ap.add_argument("--format", default="wav", choices=["wav", "flac"])
     ap.add_argument("--duration-factor", type=float, default=1.0,
                     help="语速：>1 更慢，<1 更快（有效范围 0.5–2.0）")
-    ap.add_argument("--denoise", type=float, default=0.5,
+    ap.add_argument("--pitch", type=float, default=0.0,
+                    help="音高偏移（半音），-1 ~ -2 更低沉/御姐")
+    ap.add_argument("--denoise", type=float, default=0.0,
                     help="谱门降噪强度，0=只去爆音")
     args = ap.parse_args()
 
@@ -232,7 +234,8 @@ def main():
             if i != len(pieces) - 1:
                 merged.append(silence)
         final = np.concatenate(merged)
-        final, n_jumps = clean_audio(final, sr, denoise_prop=args.denoise)
+        final, st = clean_audio(final, sr, denoise_prop=args.denoise, pitch=args.pitch)
+        n_jumps = st.get("pops", 0)
         sf.write(out_path, final, sr)
         print(f"WRITTEN {out_name} dur={len(final) / sr / 60:.1f} min "
               f"size={os.path.getsize(out_path) / 1e6:.0f} MB declick={n_jumps}")
