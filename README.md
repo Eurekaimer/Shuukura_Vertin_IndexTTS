@@ -12,25 +12,43 @@ reference audio and text, **IndexTTS-2.5 sounded clearly better**, so it is the 
 kept here. The GPT-SoVITS checkout, its virtualenv, base models and weights (~13.4 GB) were
 deleted to reclaim disk; links to re-obtain them are kept below.
 
+## Audition before continuing the book
+
+Both files use the same IndexTTS generation and the original `ref_vertin_7s.wav` reference:
+
+- [A: original output, no pitch shift](example/00_audition_A_original.wav)
+- [B: same output with gentle smoothing](example/00_audition_B_smoothed.wav)
+
+The [audition transcript](example/texts/audition_zh.txt) uses a comma in place of the
+original dash to prevent the text normalizer from reading it as “减减”.
+
+The older `00_audition_ch01.wav` used pitch shifting and aggressive processing; it is not
+the reference for this comparison. New audiobook outputs use the B smoothing settings.
+
+[Listen to chapters 01–02 with B smoothing](example/book_demo_ch01-02_B_smoothed.flac).
+
 ## Repository layout
 
 ```
 Shuukura_Vertin_IndexTTS/
 ├── README.md
 ├── .gitignore                     # ignores index-tts/, audiobook/, the EPUB
+├── bin/vertin-read                # repeatable, resume-safe audiobook launcher
 ├── example/
 │   ├── README.md                  # sample audio + how it was produced
 │   ├── vertin_ref.py              # single source of truth: reference audio + test text
 │   ├── text_prep.py               # chapter cleaning (metadata, notes, markers, quotes)
 │   ├── segmentation.py            # reading-oriented sentence/phrase splitting + pauses
-│   ├── audio_clean.py             # de-click + spectral-gate denoise (post-processing)
+│   ├── audio_clean.py             # optional FFmpeg de-click + mild treble reduction
 │   ├── tts_book.py                # EPUB -> one audio file per N chapters
 │   ├── tts_read.py                # plain text -> audio, per-sentence with pauses
 │   ├── texts/                     # short EN/ZH test scripts
 │   ├── ref_vertin_7s.wav          # reference audio used for cloning
 │   ├── ref_vertin_20s.wav         # longer reference from the same source
+│   ├── 00_audition_A/B_*.wav      # identical speech: raw vs. smoothed comparison
 │   ├── 01…04_*.wav                # short samples (EN/ZH, single sentence / paragraph)
-│   └── book_demo_ch01-02.flac     # two-chapter demo of the audiobook pipeline
+│   ├── book_demo_ch01-02.flac     # older two-chapter demo
+│   └── book_demo_ch01-02_B_smoothed.flac  # chapters 01–02 with B smoothing
 ├── index-tts/                     # NOT tracked: upstream repo + .venv + checkpoints
 └── buying-a-classmate-once-a-week/  # NOT tracked: source EPUB
 ```
@@ -60,27 +78,47 @@ uvx --with socksio --from huggingface_hub hf download IndexTeam/IndexTTS-2.5 --l
 
 ## Usage
 
-### EPUB → one audio file per 20 chapters
+### Start or resume the audiobook
+
+On this machine the launcher is registered as `vertin-read`. In a new checkout, make it
+available on your PATH once:
 
 ```bash
-cd ~/Documents/GitHub/Shuukura_Vertin_IndexTTS
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-index-tts/.venv/bin/python example/tts_book.py \
-  --epub "buying-a-classmate-once-a-week/*.epub" \
-  --out-dir audiobook --per-file 20 --duration-factor 0.85 --device cuda:0
+mkdir -p ~/.local/bin
+ln -s "$PWD/bin/vertin-read" ~/.local/bin/vertin-read
+# Ensure ~/.local/bin is on PATH.
 ```
 
-* Writes `audiobook/0001-0020.wav`, `0021-0040.wav`, … with 1.0 s of silence between chapters.
-* Existing outputs are skipped, so an interrupted run resumes by re-running the same command.
-* `--start 1 --end 2` renders a short demo; `--duration-factor 0.85` speeds speech up 15 %
-  (valid range 0.5–2.0, `>1` is slower).
+Then start or resume from a terminal:
+
+```bash
+vertin-read
+```
+
+The launcher uses the original reference, normal speed, no pitch shift, the B smoothing
+filter and FLAC output. Files are saved under `audiobook/` as `0001-0020.flac`,
+`0021-0040.flac`, and so on. Stop with Ctrl-C; after reboot run the same command.
+Completed chapters of the unfinished group are restored from `audiobook/.checkpoints/`;
+only the chapter interrupted mid-generation must be redone. Each checkpoint and output
+has a checksum manifest and is committed atomically; keep the `.manifest.json` files with
+their audio. A group’s chapter checkpoints are removed after its final file is safely
+written. Locks prevent concurrent jobs from sharing a checkpoint or output directory.
+
+The launcher expects exactly one EPUB in the source directory. Changing the EPUB,
+reference, model, text processing or generation settings starts a separate checkpoint
+set. Existing final files are skipped only when their settings and checksum match;
+otherwise the command stops without overwriting them. Use a separate output directory
+when intentionally generating a different version.
+
+`./bin/vertin-read` also works without installing the symlink. Advanced options can be
+passed through to `tts_book.py`; use `vertin-read --help` to see them.
 
 ### Plain text with explicit pauses
 
 ```bash
 index-tts/.venv/bin/python example/tts_read.py \
-  --text-file example/texts/read_zh.txt --lang zh \
-  --out example/04_indextts_read_zh.wav --device cuda:0
+  --text-file example/texts/audition_zh.txt --lang zh \
+  --out example/new_audition.wav --device cuda:0
 ```
 
 ## Text preprocessing for reading aloud
@@ -92,8 +130,8 @@ index-tts/.venv/bin/python example/tts_read.py \
   (`禁止转载`, `仅供日语学习`, `侵删` …), URLs, `[图片]` placeholders and `译注` lines;
 * extracts the chapter title (the short first line without sentence-final punctuation)
   and prepends a spoken `第N话。标题。` header;
-* repairs the translator's broken quote pairing (many `“` are used as closing quotes,
-  counts reach 41 vs 23) and collapses `。”。` to `。”`.
+* repairs the translator's broken quote pairing and collapses `。”。` to `。”`;
+* replaces long dashes with a pause, so the model does not read them as “减减”.
 
 ## Segmentation for natural pacing
 
@@ -101,34 +139,34 @@ index-tts/.venv/bin/python example/tts_read.py \
 each and would otherwise produce 500+ units per chapter with a 1 s pause after every line:
 
 1. split at sentence-final punctuation (。！？…!?);
-2. greedily merge neighbouring sentences up to `--unit-chars` (default 55) so one inference
+2. greedily merge neighbouring sentences up to `--unit-chars` (book default 70) so one inference
    call covers 1–3 sentences — fewer seams, less overhead;
-3. split over-long sentences at clause punctuation (，、；：) and hard-cut only when a sentence
-   has no clause punctuation at all;
+3. split over-long sentences at clause punctuation (，、；：);
 4. merge fragments shorter than 12 characters back into a neighbour;
-5. never split inside quotes/brackets (「」『』“”‘’（）).
+5. avoid splitting inside quotes/brackets where possible; for over-long passages, prefer
+   punctuation even inside quotes before falling back to a hard cut.
 
 Pauses: 0.35 s after a sentence, 0.18 s after a clause, 1.0 s between chapters.
 
 ## Audio post-processing
 
-The audible "impurity" turned out not to be a noise floor (−88 dB or lower) but **single-sample
-jumps at segment seams** — IndexTTS inserts silence between segments and the joins click.
-`example/audio_clean.py` runs on the final waveform:
+By default, `tts_book.py` and `tts_read.py` retain the generated waveform without pitch
+shifting, spectral gating, or zeroing detected segments. Sentence and chapter pauses are
+still added as requested.
 
-| Step | Effect |
-|---|---|
-| high-pass 60 Hz | removes sub-bass rumble (0.7 % of total energy) |
-| pop removal: zero a 1.5 ms core where the local slope exceeds 8× the ±10 ms median, with 0.7 ms cosine ramps | 13 020 spikes in 10 min → short transients drop, RMS −0.15 dB only |
-| seam de-click: 3 ms splice across remaining \|Δsample\| > 0.5 | step discontinuities → 0 |
-| `--pitch -1.5` (optional) | lowers pitch for a more matronly ("御姐") tone |
+The optional `--smooth` flag applies [FFmpeg's `adeclick`](https://ffmpeg.org/ffmpeg-filters.html#adeclick)
+with a conservative threshold of 10 and overlap-save, followed by a high-shelf cut of
+2 dB at 6.5 kHz. The filter operates on the CPU and requires FFmpeg. It may also soften
+speech sibilants; it cannot reliably remove artifacts produced by the model's vocoder.
+FLAC output is 16-bit, matching the source generation and avoiding unnecessary 24-bit files.
+Compare the two auditions before using it on a book.
 
-**Spectral-gate denoising is off by default.** `noisereduce` treated the voice itself as
-noise: RMS fell from −21.3 dB to −25.3 dB and the result sounded hollow. The silence floor is
-already ≈ −93 dB, so there is nothing to denoise. Pass `--denoise 0.3` only for genuinely noisy
-material.
+To make a separate smoothed copy of an existing file:
 
-Everything runs on the CPU and costs no VRAM. `tts_book.py` and `tts_read.py` apply it automatically.
+```bash
+index-tts/.venv/bin/python example/audio_clean.py path/to/audio.wav
+# Writes path/to/audio_smooth.wav; the original is unchanged.
+```
 
 ## Measured performance (RTX 5060, 8 GB)
 
@@ -149,16 +187,17 @@ Running two workers in parallel is **not** possible on this card: peak is ~5.9 G
 so a second instance (5.3 GB) does not fit, and GPU utilisation already reaches 100 % with one
 worker — the headroom is VRAM, not compute.
 
-Measured end-to-end on `--duration-factor 0.85`, demo = chapters 1–2
-(4,176 cleaned characters → 10.1 min of audio, 27 MB, 5.1 min wall, RTF 0.53):
+The normal-speed B demo produced 11.71 minutes for chapters 01–02 in roughly 6 minutes of
+inference (RTF ~0.5). Extrapolations are approximate:
 
-| Scope | Audio | Wall time | Disk |
+| Scope | Audio | Inference | 16-bit FLAC |
 |---|---|---|---|
-| 1 chapter (avg 2.8 k chars) | ~7 min | ~3.5 min | ~18 MB |
-| 20 chapters (49 k chars) | ~2.0 h | ~1.05 h | ~320 MB |
-| Whole book, 427 readable chapters (1.21 M chars) | ~49 h | ~26 h | ~7.7 GB |
+| Chapters 01–02, measured | 11.71 min | ~6 min | 20.0 MB |
+| First 20 chapters, estimated | ~2.4 h | ~1.2 h | ~250 MB |
+| 427 readable chapters, estimated | ~60 h | ~30 h | ~6.1 GB |
 
-Output is 22.05 kHz mono 16-bit, ~158 MB per hour (~2.7 MB per minute).
+Actual runtime depends on chapter length, hardware load, restarts and post-processing. Temporary
+checkpoints and assembly require additional space; uncompressed WAV takes ~158 MB per hour.
 
 Where the time actually goes, per 8 s of audio in one call: GPT autoregressive decoding
 1.98 s (48 %), flow-matching CFM 1.62 s (39 %), BigVGAN vocoder 0.42 s (10 %), the rest is
@@ -166,6 +205,11 @@ call overhead. The GPT is sequential by construction (25 semantic tokens per sec
 audio), so batching does not apply; the only large knob left is `INDEXTTS_DIFFUSION_STEPS`.
 
 ## Known caveats
+
+* The EPUB contains no story text for chapters 142, 169, 229, 270, 320 and 381; these are
+  password/placeholder pages and are skipped. A complete audiobook needs those texts.
+* One observed startup crashed in NVIDIA `libcuda` while loading a kernel; the cause was not
+  established. Restart `vertin-read` if it exits; completed chapter checkpoints are retained.
 
 * The reference transcript was produced by Whisper; the word `tempests` in
   “the tempests blocked every signal I sent for help” came out as `temp…` in three different

@@ -1,25 +1,28 @@
 """把 EPUB 按章节批量转成有声书（IndexTTS-2.5，Vertin 参考音频）。
 
 用法：
-    cd ~/Documents/GitHub/Vertin
-    index-tts/.venv/bin/python example/tts_book.py \
-        --epub "buying-a-classmate-once-a-week/*.epub" \
-        --out-dir audiobook --per-file 20 --device cuda:0
+    cd ~/Documents/GitHub/Shuukura_Vertin_IndexTTS
+    ./bin/vertin-read
 
 行为：
   * 按 EPUB spine 顺序取章节，跳过目录页；
-  * 每 ~per-file 章合并成一个 wav，章间插入 --chapter-pause 秒静音；
-  * 单章过长时按句子边界切成 --max-chars 字的小段分别推理，避免显存峰值；
-  * 已存在的输出文件直接跳过，可中断后续跑。
+  * 每 ~per-file 章合并成一个音频文件，章间插入 --chapter-pause 秒静音；
+  * 长文本按 --unit-chars 切分；已完成章节以校验过的检查点保存；
+  * 仅跳过校验通过且配置一致的输出，Ctrl-C 或重启后可继续。
 
 文本会做朗读向的清洗：去掉章节标题行里的英文 "episode N"、译者注、多余空白。
 """
 
 import argparse
+import fcntl
 import glob
+import hashlib
+import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 import time
 import zipfile
 from html.parser import HTMLParser
@@ -28,9 +31,59 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from vertin_ref import REF_7S  # noqa: E402
-from audio_clean import clean as clean_audio  # noqa: E402
+from audio_clean import durable_replace, smooth_file  # noqa: E402
 from segmentation import split_for_reading  # noqa: E402
 from text_prep import clean_chapter  # noqa: E402
+
+
+def _checkpoint_namespace(args, model_dir, epub_path):
+    """Identify settings that affect individual generated chapters."""
+    digest = hashlib.sha256()
+    for path in (epub_path, args.ref, __file__, os.path.join(HERE, "text_prep.py"),
+                 os.path.join(HERE, "segmentation.py"),
+                 os.path.join(model_dir, "config.yaml"),
+                 os.path.join(REPO, "index-tts", "indextts", "infer_v2_5.py")):
+        with open(path, "rb") as f:
+            digest.update(f.read())
+    for name in ("gpt.pth", "s2mel.pth", "codec.pth",
+                 "hf_cache/campplus_cn_common.bin",
+                 "hf_cache/bigvgan/bigvgan_generator.pt",
+                 "hf_cache/semantic_codec/model.safetensors",
+                 "hf_cache/w2v-bert-2.0/model.safetensors"):
+        path = os.path.join(model_dir, name)
+        stat = os.stat(path) if os.path.isfile(path) else None
+        digest.update(f"{name}:{stat.st_size if stat else None}:{stat.st_mtime_ns if stat else None}".encode())
+    digest.update(json.dumps([args.lang, args.unit_chars, args.interval_silence,
+                              args.duration_factor, args.device]).encode())
+    return digest.hexdigest()[:20]
+
+
+def _file_hash(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_manifest(path, signature, audio_path):
+    data = {"signature": signature, "size": os.path.getsize(audio_path),
+            "sha256": _file_hash(audio_path)}
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, sort_keys=True)
+    durable_replace(tmp, path)
+
+
+def _verified_file(path, signature):
+    path = os.fspath(path)
+    try:
+        with open(path + ".manifest.json", encoding="utf-8") as f:
+            data = json.load(f)
+        return (data["signature"] == signature and data["size"] == os.path.getsize(path)
+                and data["sha256"] == _file_hash(path))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 class TextExtract(HTMLParser):
@@ -149,15 +202,14 @@ def main():
     ap.add_argument("--format", default="wav", choices=["wav", "flac"])
     ap.add_argument("--duration-factor", type=float, default=1.0,
                     help="语速：>1 更慢，<1 更快（有效范围 0.5–2.0）")
-    ap.add_argument("--pitch", type=float, default=0.0,
-                    help="音高偏移（半音），-1 ~ -2 更低沉/御姐")
-    ap.add_argument("--denoise", type=float, default=0.0,
-                    help="谱门降噪强度，0=只去爆音")
+    ap.add_argument("--smooth", action="store_true", help="apply mild declick and treble reduction")
+    ap.add_argument("--checkpoint-dir", help="directory for resumable chapter audio")
+    ap.add_argument("--keep-checkpoints", action="store_true", help="retain chapter checkpoints after output")
     args = ap.parse_args()
 
     paths = glob.glob(args.epub)
-    if not paths:
-        sys.exit(f"epub not found: {args.epub}")
+    if len(paths) != 1:
+        sys.exit(f"expected exactly one EPUB for {args.epub}, found {len(paths)}")
     chapters = load_chapters(paths[0])
     end = args.end or len(chapters)
     sel = chapters[args.start - 1:end]
@@ -165,13 +217,29 @@ def main():
           f"chars={sum(len(c[1]) for c in sel)}")
 
     os.makedirs(args.out_dir, exist_ok=True)
+    ckpt = os.path.join(REPO, "index-tts/checkpoints")
+    checkpoint_root = args.checkpoint_dir or os.path.join(args.out_dir, ".checkpoints")
+    os.makedirs(checkpoint_root, exist_ok=True)
+    lock = open(os.path.join(checkpoint_root, ".lock"), "a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(f"another audiobook process is using {checkpoint_root}")
+    output_lock = open(os.path.join(args.out_dir, ".vertin.lock"), "a")
+    try:
+        fcntl.flock(output_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(f"another audiobook process is using {args.out_dir}")
+    namespace = _checkpoint_namespace(args, ckpt, paths[0])
+    checkpoint_dir = os.path.join(checkpoint_root, namespace)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    print(f"chapter checkpoints: {checkpoint_dir}")
 
     import numpy as np
     import soundfile as sf
     sys.path.insert(0, os.path.join(REPO, "index-tts"))
     from indextts.infer_v2_5 import IndexTTS2
 
-    ckpt = os.path.join(REPO, "index-tts/checkpoints")
     t0 = time.time()
     tts = IndexTTS2(cfg_path=os.path.join(ckpt, "config.yaml"), model_dir=ckpt,
                     use_bf16=(args.device != "cpu"), use_cuda_kernel=False, device=args.device)
@@ -180,8 +248,11 @@ def main():
     tts.low_vram = False
     print(f"model loaded in {time.time() - t0:.1f}s on {args.device}")
 
-    tmp = os.path.join(args.out_dir, ".tmp")
-    os.makedirs(tmp, exist_ok=True)
+    for entry in os.scandir(args.out_dir):
+        if entry.name.startswith(".vertin-tmp-") and entry.is_dir(follow_symlinks=False):
+            shutil.rmtree(entry.path)
+    tmp = tempfile.mkdtemp(prefix=".vertin-tmp-", dir=args.out_dir)
+    filter_hash = _file_hash(os.path.join(HERE, "audio_clean.py")) if args.smooth else ""
     lang = "ZH" if args.lang == "zh" else "EN"
 
     spent_audio = 0.0
@@ -192,17 +263,35 @@ def main():
         last_no = first_no + len(group) - 1
         out_name = f"{first_no:04d}-{last_no:04d}.{args.format}"
         out_path = os.path.join(args.out_dir, out_name)
+        output_signature = hashlib.sha256(json.dumps(
+            [namespace, first_no, last_no, args.format, args.chapter_pause, args.smooth, filter_hash]
+        ).encode()).hexdigest()
         if os.path.exists(out_path):
-            print(f"skip existing {out_name}")
+            if not _verified_file(out_path, output_signature):
+                sys.exit(f"existing output is damaged or uses different settings: {out_path}; "
+                         "choose another output directory rather than overwriting it")
+            print(f"skip verified {out_name}")
             continue
 
         pieces = []
+        group_checkpoints = []
         for k, (name, raw) in enumerate(group):
             ch_no = first_no + k
             text, prep_stats = clean_chapter(raw, ch_no)
             if prep_stats["missing"]:
                 print(f"  ch{ch_no:04d} SKIP (no readable body: {prep_stats['chars']} chars)")
                 continue
+            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+            chapter_file = os.path.join(checkpoint_dir, f"{ch_no:04d}-{text_hash}.flac")
+            if os.path.isfile(chapter_file):
+                if _verified_file(chapter_file, text_hash):
+                    ch_audio, sr = sf.read(chapter_file, dtype="float32")
+                    pieces.append(ch_audio)
+                    group_checkpoints.append(chapter_file)
+                    print(f"  ch{ch_no:04d} RESTORED {len(ch_audio) / sr:.1f}s [{k + 1}/{len(group)}]")
+                    continue
+                print(f"  ch{ch_no:04d} invalid checkpoint; regenerating")
+                os.remove(chapter_file)
             units = split_for_reading(text, max_chars=args.unit_chars)
             audio_parts = []
             for ci, (chunk, pause) in enumerate(units):
@@ -211,7 +300,7 @@ def main():
                 tts.infer(spk_audio_prompt=args.ref, text=chunk, lang=lang,
                           output_path=seg_path, interval_silence=args.interval_silence,
                           duration_factor=args.duration_factor, verbose=False)
-                a, sr = sf.read(seg_path)
+                a, sr = sf.read(seg_path, dtype="float32")
                 os.remove(seg_path)
                 audio_parts.append(a)
                 if pause > 0:
@@ -219,6 +308,12 @@ def main():
                 spent_wall += time.time() - t1
                 spent_audio += len(a) / sr
             ch_audio = np.concatenate(audio_parts)
+            chapter_tmp = chapter_file + ".tmp.flac"
+            sf.write(chapter_tmp, ch_audio, sr, subtype="PCM_16")
+            _write_manifest(chapter_file + ".manifest.json", text_hash, chapter_tmp)
+            durable_replace(chapter_tmp, chapter_file)
+            group_checkpoints.append(chapter_file)
+            print(f"  ch{ch_no:04d} CHECKPOINT saved")
             pieces.append(ch_audio)
             print(f"  ch{ch_no:04d} {len(ch_audio) / sr:6.1f}s units={len(units)} "
                   f"drop={prep_stats['dropped_lines']} "
@@ -234,13 +329,23 @@ def main():
             if i != len(pieces) - 1:
                 merged.append(silence)
         final = np.concatenate(merged)
-        final, st = clean_audio(final, sr, denoise_prop=args.denoise, pitch=args.pitch)
-        n_jumps = st.get("pops", 0)
-        sf.write(out_path, final, sr)
+        raw_path = os.path.join(tmp, out_name)
+        sf.write(raw_path, final, sr, subtype="PCM_16")
+        prepared_path = raw_path
+        if args.smooth:
+            prepared_path = os.path.join(tmp, "smooth-" + out_name)
+            smooth_file(raw_path, prepared_path)
+            os.remove(raw_path)
+        _write_manifest(out_path + ".manifest.json", output_signature, prepared_path)
+        durable_replace(prepared_path, out_path)
+        if not args.keep_checkpoints:
+            for chapter_file in group_checkpoints:
+                os.remove(chapter_file)
+                os.remove(chapter_file + ".manifest.json")
         print(f"WRITTEN {out_name} dur={len(final) / sr / 60:.1f} min "
-              f"size={os.path.getsize(out_path) / 1e6:.0f} MB declick={n_jumps}")
+              f"size={os.path.getsize(out_path) / 1e6:.0f} MB")
 
-    os.rmdir(tmp)
+    shutil.rmtree(tmp)
     if spent_audio:
         print(f"DONE audio={spent_audio / 60:.1f} min wall={spent_wall / 60:.1f} min "
               f"rtf={spent_wall / spent_audio:.2f}")

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(dirname "$(dirname "$(readlink -f "$0")")")
+cd "$ROOT"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+exec "$ROOT/index-tts/.venv/bin/python" -u "$ROOT/example/tts_book.py" \
+  --epub "$ROOT/buying-a-classmate-once-a-week/*.epub" \
+  --out-dir "$ROOT/audiobook" --checkpoint-dir "$ROOT/audiobook/.checkpoints" \
+  --per-file 20 --format flac --duration-factor 1.0 --device cuda:0 --smooth "$@"

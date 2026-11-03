@@ -7,7 +7,7 @@ EPUB 里每个 <p> 往往只有一句话，靠换行判断段落会把每句都�
   2. 相邻短句贪心合并到 unit_chars 上限，让一次推理覆盖 1–3 句，减少接缝。
   3. 单句超过上限时，再按逗号/顿号/分号/冒号在小句边界切开。
   4. 仍然过短的碎片并回相邻单元，避免「对。」单独成段。
-  5. 引号/括号内的标点不切分（「」『』“”‘’（）()）。
+  5. 尽量不在引号/括号内切分；超长时优先在内部标点切分。
 
 停顿：句末 0.35 s，小句末 0.18 s。正常人朗读的节奏主要由标点决定，
 段末额外停顿在小说里只会让节奏变拖。
@@ -63,12 +63,17 @@ def _split_at_clauses(sent, max_chars):
             buf += p
     if buf:
         merged.append(buf)
-    # 没有任何逗号的超长句：硬切，避免单次推理过长
+    # 对话过长时先在标点处分段，避免直接把词语从中间切开。
     out = []
     for m in merged or [sent]:
         while len(m) > max_chars:
-            out.append(m[:max_chars])
-            m = m[max_chars:]
+            cut = max((m.rfind(ch, 0, max_chars) for ch in SENT_END + CLAUSE_END), default=-1) + 1
+            if cut <= 0:
+                cut = max_chars
+            while cut < len(m) and m[cut] in CLOSE_Q:
+                cut += 1
+            out.append(m[:cut])
+            m = m[cut:]
         if m:
             out.append(m)
     return out

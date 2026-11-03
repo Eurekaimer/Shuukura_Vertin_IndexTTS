@@ -26,7 +26,7 @@ ORIG_CWD = os.getcwd()
 
 sys.path.insert(0, HERE)
 from vertin_ref import REF_7S  # noqa: E402
-from audio_clean import clean as clean_audio  # noqa: E402
+from audio_clean import smooth_file  # noqa: E402
 
 SENT_END = "。！？；…!?;."
 LANG_CODE = {"zh": "ZH", "en": "EN", "ja": "JA"}
@@ -59,8 +59,7 @@ def main():
     ap.add_argument("--pause", type=float, default=0.35, help="句间静音秒数")
     ap.add_argument("--para-pause", type=float, default=0.9, help="段落间静音秒数")
     ap.add_argument("--device", default="cuda:0", help="cuda:0 / cpu")
-    ap.add_argument("--pitch", type=float, default=0.0, help="音高偏移（半音）")
-    ap.add_argument("--denoise", type=float, default=0.0)
+    ap.add_argument("--smooth", action="store_true", help="apply mild declick and treble reduction")
     ap.add_argument("--interval-silence", type=int, default=350,
                     help="IndexTTS 段内句间静音毫秒")
     args = ap.parse_args()
@@ -112,11 +111,11 @@ def main():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     out_audio = np.concatenate(chunks)
-    out_audio, st = clean_audio(out_audio, sr_out, denoise_prop=args.denoise, pitch=args.pitch)
-    n_jumps = st.get("pops", 0)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     sf.write(args.out, out_audio, sr_out)
-    print(f"WRITTEN {args.out} sr={sr_out} dur={len(out_audio) / sr_out:.2f}s declick={n_jumps}")
+    if args.smooth:
+        smooth_file(args.out, args.out)
+    print(f"WRITTEN {args.out} sr={sr_out} dur={len(out_audio) / sr_out:.2f}s")
 
 
 if __name__ == "__main__":
