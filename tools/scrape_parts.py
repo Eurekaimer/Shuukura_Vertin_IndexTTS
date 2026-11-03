@@ -25,8 +25,12 @@ from urllib3.util.retry import Retry
 TOC = "https://avelilium.com/story-about-buying-my-classmate-once-a-week/"
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/124 Safari/537.36")
-STOP = re.compile(r"^\s*(?:Credits?\b|If you enjoyed|Next part|Previous part|Share this|"
-                  r"Turn on JavaScript)", re.I)
+STOP = re.compile(r"^\s*(?:Credits?\b|If you enjoyed|Turn on JavaScript|"
+                  r"<\s*Previous\s+Part|Previous\s+Part\s*\||Leave a Reply)", re.I)
+NAV = re.compile(r"(?:<\s*Previous\s+Part|Previous\s+Part\s*\||Next\s+Part\s*>)", re.I)
+NOTE = re.compile(r"(?:Click here|Credits to|Next part will come|ePub for volume|"
+                  r"available for download|Discord|Ko-Fi|Ko-fi|open to commissions|"
+                  r"Chapter debt|Thank you all for reading|next part will be coming|odd-numbered)", re.I)
 STOP_EXACT = re.compile(r"^\s*(?:Name|Email|Website|Comment|Subscribe|Subscribed|"
                         r"Leave a Reply|Δ)\s*$", re.I)
 NOISE = re.compile(r"(?:document\.|getElementById|window\.|function\s*\()")
@@ -110,9 +114,9 @@ def parse_part(page):
             continue
         if MARKER.match(text):
             continue
-        if STOP.match(text) or STOP_EXACT.match(text):
+        if STOP.match(text) or STOP_EXACT.match(text) or NAV.search(text):
             break
-        if NOISE.search(text):
+        if NOTE.search(text) or NOISE.search(text):
             continue
         out.append(text.replace("「", "“").replace("」", "”")
                     .replace("『", "‘").replace("』", "’"))
