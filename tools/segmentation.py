@@ -40,7 +40,8 @@ def _split_sentences(text, sent_end=SENT_END):
     return [s for s in out if s]
 
 
-def _split_at_clauses(sent, max_chars, sent_end=SENT_END, clause_end=CLAUSE_END):
+def _split_at_clauses(sent, max_chars, sent_end=SENT_END, clause_end=CLAUSE_END,
+                      prefer_word_boundary=False):
     """单句过长时按小句标点切，再合并到 <= max_chars。"""
     parts, cur, depth = [], "", 0
     for ch in sent:
@@ -68,6 +69,8 @@ def _split_at_clauses(sent, max_chars, sent_end=SENT_END, clause_end=CLAUSE_END)
     for m in merged or [sent]:
         while len(m) > max_chars:
             cut = max((m.rfind(ch, 0, max_chars) for ch in sent_end + clause_end), default=-1) + 1
+            if cut <= 0 and prefer_word_boundary:
+                cut = m.rfind(" ", 0, max_chars + 1)
             if cut <= 0:
                 cut = max_chars
             while cut < len(m) and m[cut] in CLOSE_Q:
@@ -96,7 +99,7 @@ def _split_flat(text, max_chars, min_chars, sent_end, clause_end, join_lines,
 
     phrases, buf = [], ""
     for sent in _split_sentences(flat, sent_end):
-        pieces = (_split_at_clauses(sent, max_chars, sent_end, clause_end)
+        pieces = (_split_at_clauses(sent, max_chars, sent_end, clause_end, bool(join_lines))
                   if len(sent) > max_chars else [sent])
         for piece in pieces:
             if buf and len(buf) + len(piece) > max_chars:
