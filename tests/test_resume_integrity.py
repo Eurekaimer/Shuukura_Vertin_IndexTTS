@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "example"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from audio_clean import durable_replace
 from tts_book import _verified_file, _write_manifest
 

@@ -2,7 +2,7 @@
 
 用法：
     cd ~/Documents/GitHub/Shuukura_Vertin_IndexTTS
-    index-tts/.venv/bin/python example/tts_read.py \
+    index-tts/.venv/bin/python tools/tts_read.py \
         --text-file example/texts/read_zh.txt --lang zh \
         --out example/04_indextts_read_zh.wav
 
