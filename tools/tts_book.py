@@ -234,6 +234,9 @@ def main():
                     audio_parts.append(np.zeros(int(sr * pause), dtype=a.dtype))
                 spent_wall += time.time() - t1
                 spent_audio += len(a) / sr
+                if ci and ci % 20 == 0:
+                    print(f"  ch{ch_no:04d} {ci}/{len(units)} units "
+                          f"({ci / len(units):.0%})")
             ch_audio = np.concatenate(audio_parts)
             chapter_tmp = chapter_file + ".tmp.flac"
             sf.write(chapter_tmp, ch_audio, sr, subtype="PCM_16")
