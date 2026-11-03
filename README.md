@@ -27,39 +27,60 @@ the reference for this comparison. New audiobook outputs use the B smoothing set
 
 [Listen to chapters 01–02 with B smoothing](example/book_demo_ch01-02_B_smoothed.flac).
 
+English auditions are written to `example/en_preview/` (`ch0001.flac`, `ch0002.flac`, …),
+rendered with the same checkpoints and reference audio; that directory is not tracked.
+
 ## Repository layout
 
 ```
 Shuukura_Vertin_IndexTTS/
 ├── README.md
-├── .gitignore                     # ignores index-tts/, audiobook/, the EPUB
+├── pyproject.toml, uv.lock        # scraper tooling only (requests)
+├── .gitignore                     # ignores index-tts/, audiobook/, books/
 ├── bin/vertin-read                # repeatable, resume-safe audiobook launcher
-├── example/
-│   ├── README.md                  # sample audio + how it was produced
+├── books/
+│   ├── shuukura-zh/
+│   │   ├── book.json              # EPUB spec: source glob, segmentation, unit_chars
+│   │   └── source/*.epub          # NOT tracked: source EPUB
+│   └── shuukura-en/
+│       ├── book.json              # scraped-text spec
+│       ├── parts/                 # raw scrape, one file per part (resume unit)
+│       └── chapters/              # chapter header + its parts joined
+├── tools/
+│   ├── books.py                   # book.json -> chapter list (EPUB or scraped text)
+│   ├── scrape_parts.py            # English chapters from Ave Lilium, resumable
 │   ├── vertin_ref.py              # single source of truth: reference audio + test text
 │   ├── text_prep.py               # chapter cleaning (metadata, notes, markers, quotes)
 │   ├── segmentation.py            # reading-oriented sentence/phrase splitting + pauses
 │   ├── audio_clean.py             # optional FFmpeg de-click + mild treble reduction
-│   ├── tts_book.py                # EPUB -> one audio file per N chapters
+│   ├── tts_book.py                # book -> one audio file per N chapters
 │   ├── tts_read.py                # plain text -> audio, per-sentence with pauses
-│   ├── texts/                     # short EN/ZH test scripts
+│   └── make_plan.py               # export every chapter's reading units
+├── assets/
 │   ├── ref_vertin_7s.wav          # reference audio used for cloning
-│   ├── ref_vertin_20s.wav         # longer reference from the same source
+│   └── ref_vertin_20s.wav         # longer reference from the same source
+├── example/
+│   ├── README.md                  # sample audio + how it was produced
+│   ├── texts/                     # short EN/ZH test scripts
 │   ├── 00_audition_A/B_*.wav      # identical speech: raw vs. smoothed comparison
 │   ├── 01…04_*.wav                # short samples (EN/ZH, single sentence / paragraph)
-│   ├── book_demo_ch01-02.flac     # older two-chapter demo
-│   └── book_demo_ch01-02_B_smoothed.flac  # chapters 01–02 with B smoothing
+│   ├── book_demo_ch01-02*.flac    # older two-chapter demos
+│   └── en_preview/                # English audition: ch0001.flac, ch0002.flac
+├── audiobook/
+│   ├── shuukura-zh/               # NOT tracked: Chinese output + checkpoints
+│   └── shuukura-en/               # NOT tracked: English full-book output
 ├── index-tts/                     # NOT tracked: upstream repo + .venv + checkpoints
-└── buying-a-classmate-once-a-week/  # NOT tracked: source EPUB
+└── tests/
 ```
 
 ## Sources
 
 | Item | Source |
 |---|---|
-| **Reference voice** | [BV1w64y1j7HT](https://www.bilibili.com/video/BV1w64y1j7HT/) — Vertin solo voice cut, chapter 5. Used `343.86–350.71 s` → `example/ref_vertin_7s.wav` |
+| **Reference voice** | [BV1w64y1j7HT](https://www.bilibili.com/video/BV1w64y1j7HT/) — Vertin solo voice cut, chapter 5. Used `343.86–350.71 s` → `assets/ref_vertin_7s.wav` |
 | GPT-SoVITS checkpoints (removed) | [BV1RN3gezEFQ](https://www.bilibili.com/video/BV1RN3gezEFQ/) — Baidu Netdisk link in the description |
 | Audiobook text | 『一周一次买下同班同学的那些事』 by 羽田宇佐, fan translation EPUB, 433 chapters / 1.30 M characters |
+| English text | [Story About Buying My Classmate Once A Week](https://avelilium.com/story-about-buying-my-classmate-once-a-week/), Ave Lilium fan translation; chapter pages on [amawashigroup.wordpress.com](https://amawashigroup.wordpress.com/) |
 | IndexTTS-2.5 | [IndexTeam/IndexTTS-2.5](https://huggingface.co/IndexTeam/IndexTTS-2.5), code: [index-tts/index-tts](https://github.com/index-tts/index-tts) |
 
 ## Environment
@@ -96,53 +117,79 @@ vertin-read
 ```
 
 The launcher uses the original reference, normal speed, no pitch shift, the B smoothing
-filter and FLAC output. Files are saved under `audiobook/` as `0001-0020.flac`,
-`0021-0040.flac`, and so on. Stop with Ctrl-C; after reboot run the same command.
-Completed chapters of the unfinished group are restored from `audiobook/.checkpoints/`;
-only the chapter interrupted mid-generation must be redone. Each checkpoint and output
-has a checksum manifest and is committed atomically; keep the `.manifest.json` files with
-their audio. A group’s chapter checkpoints are removed after its final file is safely
-written. Locks prevent concurrent jobs from sharing a checkpoint or output directory.
+filter and FLAC output. Chinese files are saved under `audiobook/shuukura-zh/` as
+`ch0001-0020.flac`, `ch0021-0040.flac`, and so on. Stop with Ctrl-C; after reboot run the
+same command. Completed chapters of the unfinished group are restored from
+`audiobook/shuukura-zh/.checkpoints/`; only the chapter interrupted mid-generation must be
+redone. Each checkpoint and output has a checksum manifest and is committed atomically;
+keep the `.manifest.json` files with their audio. A group’s chapter checkpoints are removed
+after its final file is safely written. Locks prevent concurrent jobs from sharing a
+checkpoint or output directory.
 
 The launcher restarts itself when a run dies from a signal (SIGSEGV, SIGABRT, …) and continues
 from the last verified chapter; ordinary errors such as a bad path still stop it. Observed
 crashes came from native code (`libcuda`, the FST text normalizer), not from the chapter text:
 all 22,364 reading units normalize without error in a clean process.
 
-The launcher expects exactly one EPUB in the source directory. Changing the EPUB,
-reference, model, text processing or generation settings starts a separate checkpoint
-set. Existing final files are skipped only when their settings and checksum match;
-otherwise the command stops without overwriting them. Use a separate output directory
-when intentionally generating a different version.
+The launcher reads `books/shuukura-zh/book.json`, which must match exactly one EPUB under
+`source/`. Changing the book spec, source text, reference, model, text processing,
+segmentation or generation settings starts a separate checkpoint set. Existing final files
+are skipped only when their settings and checksum match; otherwise the command stops without
+overwriting them. Use a separate output directory when intentionally generating a different
+version.
 
 `./bin/vertin-read` also works without installing the symlink. Advanced options can be
-passed through to `tts_book.py`; use `vertin-read --help` to see them.
+passed through to `tts_book.py`; use `vertin-read --help` to see them. `--book` and
+`--out-dir` override the Chinese defaults, so the same launcher renders the English book.
 
 ### Inspect the reading plan for every chapter
 
 ```bash
-index-tts/.venv/bin/python example/make_plan.py \
-  --epub "buying-a-classmate-once-a-week/*.epub" --out-dir audiobook/plans
+index-tts/.venv/bin/python tools/make_plan.py \
+  --book books/shuukura-zh --out-dir audiobook/shuukura-zh/plans
 ```
 
-Writes `audiobook/plans/plan.json` — each chapter's cleaned text split into inference units
-with their pause lengths, plus source hashes — and `plan.txt`, one unit per line
-(`NNNN [iii] text`). Current output: 22,364 units over 427 readable chapters, 54 characters on
-average, and one unit that has to be cut without punctuation. Inference does not consume these
-files yet: switching to them changes the checkpoint namespace and would re-render finished
-chapters, so it should happen between passes, not mid-run.
+Writes `plan.json` — each chapter's text split into inference units with their pause
+lengths, plus source hashes — and `plan.txt`, one unit per line (`NNNN [iii] text`). Current
+Chinese output: 22,364 units over 427 readable chapters, 54 characters on average, and one
+unit that has to be cut without punctuation. Inference does not consume these files yet:
+switching to them changes the checkpoint namespace and would re-render finished chapters,
+so it should happen between passes, not mid-run.
 
 ### Plain text with explicit pauses
 
 ```bash
-index-tts/.venv/bin/python example/tts_read.py \
+index-tts/.venv/bin/python tools/tts_read.py \
   --text-file example/texts/audition_zh.txt --lang zh \
   --out example/new_audition.wav --device cuda:0
 ```
 
+### English book (scrape, then audition)
+
+The English fan translation (Ave Lilium) is scraped per part; each part file is the
+resume unit, and `chapters/` is rebuilt from the parts already on disk:
+
+```bash
+uv run python tools/scrape_parts.py --chapters 1-2   # --dry-run lists chapters/parts only
+uv run python tools/scrape_parts.py --chapters 1-2 --force   # refetch existing parts
+```
+
+Then render with the same checkpoints and reference audio:
+
+```bash
+index-tts/.venv/bin/python tools/tts_book.py \
+  --book books/shuukura-en --out-dir example/en_preview --per-file 1 \
+  --format flac --smooth --device cuda:0
+```
+
+The English spec uses `unit_chars` 140, sentence endings `.!?;…`, clause endings `,;:` and
+`join_lines` `" "` so words never fuse across lines. Output names are
+`ch0001.flac`, `ch0002.flac`, … A part that still fails after retries exits with its URL and
+a rerun resumes.
+
 ## Text preprocessing for reading aloud
 
-`example/text_prep.py` keeps only what should be spoken:
+`tools/text_prep.py` keeps only what should be spoken:
 
 * drops the table-of-contents file (it masquerades as `chapter_001.xhtml`),
   pure `Episode N` marker lines, navigation words, translator disclaimers
@@ -154,7 +201,7 @@ index-tts/.venv/bin/python example/tts_read.py \
 
 ## Segmentation for natural pacing
 
-`example/segmentation.py` splits by punctuation only — EPUB `<p>` boundaries are one sentence
+`tools/segmentation.py` splits by punctuation only — EPUB `<p>` boundaries are one sentence
 each and would otherwise produce 500+ units per chapter with a 1 s pause after every line:
 
 1. split at sentence-final punctuation (。！？…!?);
@@ -165,7 +212,9 @@ each and would otherwise produce 500+ units per chapter with a 1 s pause after e
 5. avoid splitting inside quotes/brackets where possible; for over-long passages, prefer
    punctuation even inside quotes before falling back to a hard cut.
 
-Pauses: 0.35 s after a sentence, 0.18 s after a clause, 1.0 s between chapters.
+Pauses: 0.35 s after a sentence, 0.18 s after a clause, 1.0 s between chapters. Sentence
+endings, clause endings, line joining and `unit_chars` come from each book's `book.json`;
+Chinese keeps `join_lines: ""`, English uses `" "`.
 
 ## Audio post-processing
 
@@ -183,7 +232,7 @@ Compare the two auditions before using it on a book.
 To make a separate smoothed copy of an existing file:
 
 ```bash
-index-tts/.venv/bin/python example/audio_clean.py path/to/audio.wav
+index-tts/.venv/bin/python tools/audio_clean.py path/to/audio.wav
 # Writes path/to/audio_smooth.wav; the original is unchanged.
 ```
 
