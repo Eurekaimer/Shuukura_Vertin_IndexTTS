@@ -1,0 +1,12 @@
+# IndexTTS 是独立 git 仓库（自带 upstream remote），不作为本仓库内容跟踪；
+# 否则 git 只记录一个 gitlink，权重/venv 照样推不上去。
+index-tts/
+
+# 有声书输出体积大（约 158 MB/小时），按需生成
+audiobook/
+
+# 第三方翻译文本，不入库
+buying-a-classmate-once-a-week/
+
+__pycache__/
+*.pyc
