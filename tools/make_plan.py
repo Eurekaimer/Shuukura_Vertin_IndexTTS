@@ -61,8 +61,8 @@ def main():
                                      "chars": len(chapter.text)})
             lines.append(f"{chapter.no:04d} [skipped] 无正文（占位/密码页），不推理")
             continue
-        units = split_for_reading(chapter.text, max_chars=args.unit_chars,
-                                  **spec["segmentation"])
+        seg = {k: v for k, v in spec["segmentation"].items() if k != "part_pause"}
+        units = split_for_reading(chapter.text, max_chars=args.unit_chars, **seg)
         entries = []
         for index, (unit, pause) in enumerate(units):
             cut = not unit.endswith(tuple(endings))

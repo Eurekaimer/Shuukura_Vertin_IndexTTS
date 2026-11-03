@@ -4,6 +4,14 @@ Zero-shot voice cloning of **Vertin** (*Reverse: 1999*) with **IndexTTS-2.5**, u
 text and EPUB books into audiobooks. The name comes from the source novel's Japanese title,
 『週に一度クラスメイトを買う話』.
 
+## Use the English version
+
+Render the **English** book (`books/shuukura-en`) — the same Vertin checkpoints read the
+English fan translation cleanly, with natural word boundaries and pauses. The Chinese EPUB
+path is kept for reference only: the English-only reference voice reads Chinese with an
+audible “spicy-strip” (`辣条音`) quality, so those renders are no longer produced. Chinese
+sample audio remains under `example/` for comparison.
+
 ## Why IndexTTS
 
 GPT-SoVITS (both the v1 and v4 Vertin checkpoints) was wired up first and worked —
@@ -126,7 +134,9 @@ keep the `.manifest.json` files with their audio. A chapter’s checkpoint is re
 its output file is safely written. Locks prevent concurrent jobs from sharing a checkpoint
 or output directory.
 
-Chinese keeps its 20-chapter files and its own state:
+Chinese renders are deprecated (the reference voice produces the `辣条音` artifact on Chinese
+text); only the Chinese samples under `example/` are kept. The `books/shuukura-zh` spec still
+works if you deliberately want to re-render:
 
 ```bash
 vertin-read --book "$PWD/books/shuukura-zh" --out-dir "$PWD/audiobook/shuukura-zh" \
@@ -153,7 +163,7 @@ when intentionally generating a different version.
 
 ```bash
 index-tts/.venv/bin/python tools/make_plan.py \
-  --book books/shuukura-zh --out-dir audiobook/shuukura-zh/plans
+  --book books/shuukura-en --out-dir audiobook/shuukura-en/plans
 ```
 
 Writes `plan.json` — each chapter's text split into inference units with their pause
@@ -189,10 +199,17 @@ index-tts/.venv/bin/python tools/tts_book.py \
   --format flac --smooth --device cuda:0
 ```
 
-The English spec uses `unit_chars` 140, sentence endings `.!?;…`, clause endings `,;:` and
-`join_lines` `" "` so words never fuse across lines. Output names are
-`ch0001.flac`, `ch0002.flac`, … A part that still fails after retries exits with its URL and
-a rerun resumes.
+The English spec uses `unit_chars` 140, sentence endings `.!?;…`, clause endings `,;:`,
+`join_lines` `" "` so words never fuse across lines, and reading pauses of 0.45 s after a
+sentence, 0.22 s after a clause, 0.75 s after a paragraph and 1.2 s between web parts.
+`books.load_book` also polishes the raw scrape for speech: web/footer residue and decorative
+lines are dropped, parenthetical en/em dashes become commas, leading dash cues are removed,
+and emphasis markers are stripped.
+
+Each web chapter is **one output file** (`ch0001.flac`, `ch0002.flac`, …) assembled from its
+parts, with the part pause inserted between part boundaries. Resume works per chapter: a
+finished chapter is checkpointed and skipped on the next run, so stopping mid-book loses at
+most the chapter in progress.
 
 ## Text preprocessing for reading aloud
 

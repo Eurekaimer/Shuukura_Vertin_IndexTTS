@@ -219,24 +219,34 @@ def main():
                     continue
                 print(f"  ch{ch_no:04d} invalid checkpoint; regenerating")
                 os.remove(chapter_file)
-            units = split_for_reading(text, max_chars=args.unit_chars, **spec["segmentation"])
+            seg = spec["segmentation"]
+            part_pause = seg.get("part_pause", 0.0)
+            seg_kwargs = {k: v for k, v in seg.items() if k != "part_pause"}
+            parts = chapter.parts or [text]
             audio_parts = []
-            for ci, (chunk, pause) in enumerate(units):
-                seg_path = os.path.join(tmp, f"{ch_no:04d}_{ci:03d}.wav")
-                t1 = time.time()
-                tts.infer(spk_audio_prompt=args.ref, text=chunk, lang=lang,
-                          output_path=seg_path, interval_silence=args.interval_silence,
-                          duration_factor=args.duration_factor, verbose=False)
-                a, sr = sf.read(seg_path, dtype="float32")
-                os.remove(seg_path)
-                audio_parts.append(a)
-                if pause > 0:
-                    audio_parts.append(np.zeros(int(sr * pause), dtype=a.dtype))
-                spent_wall += time.time() - t1
-                spent_audio += len(a) / sr
-                if ci and ci % 20 == 0:
-                    print(f"  ch{ch_no:04d} {ci}/{len(units)} units "
-                          f"({ci / len(units):.0%})")
+            total_units = 0
+            for pi, part in enumerate(parts):
+                units = split_for_reading(part, max_chars=args.unit_chars, **seg_kwargs)
+                total_units += len(units)
+                for ci, (chunk, pause) in enumerate(units):
+                    seg_path = os.path.join(tmp, f"{ch_no:04d}_{pi:02d}_{ci:03d}.wav")
+                    t1 = time.time()
+                    tts.infer(spk_audio_prompt=args.ref, text=chunk, lang=lang,
+                              output_path=seg_path, interval_silence=args.interval_silence,
+                              duration_factor=args.duration_factor, verbose=False)
+                    a, sr = sf.read(seg_path, dtype="float32")
+                    os.remove(seg_path)
+                    audio_parts.append(a)
+                    if pause > 0:
+                        audio_parts.append(np.zeros(int(sr * pause), dtype=a.dtype))
+                    spent_wall += time.time() - t1
+                    spent_audio += len(a) / sr
+                    if ci and ci % 20 == 0:
+                        print(f"  ch{ch_no:04d} part {pi + 1}/{len(parts)} "
+                              f"{ci}/{len(units)} ({ci / len(units):.0%})")
+                if part_pause > 0 and pi != len(parts) - 1 and units:
+                    audio_parts.append(np.zeros(int(sr * part_pause),
+                                                dtype=audio_parts[-1].dtype))
             ch_audio = np.concatenate(audio_parts)
             chapter_tmp = chapter_file + ".tmp.flac"
             sf.write(chapter_tmp, ch_audio, sr, subtype="PCM_16")
@@ -245,7 +255,7 @@ def main():
             group_checkpoints.append(chapter_file)
             print(f"  ch{ch_no:04d} CHECKPOINT saved")
             pieces.append(ch_audio)
-            print(f"  ch{ch_no:04d} {len(ch_audio) / sr:6.1f}s units={len(units)} "
+            print(f"  ch{ch_no:04d} {len(ch_audio) / sr:6.1f}s units={total_units} "
                   f"rtf={spent_wall / max(spent_audio, 1e-6):.2f}  [{k + 1}/{len(group)}]")
 
         if not pieces:

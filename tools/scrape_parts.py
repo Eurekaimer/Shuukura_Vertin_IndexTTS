@@ -25,7 +25,12 @@ from urllib3.util.retry import Retry
 TOC = "https://avelilium.com/story-about-buying-my-classmate-once-a-week/"
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/124 Safari/537.36")
-STOP = re.compile(r"^\s*(?:Credits?\b|If you enjoyed|Next part|Previous part|Share this)")
+STOP = re.compile(r"^\s*(?:Credits?\b|If you enjoyed|Next part|Previous part|Share this|"
+                  r"Turn on JavaScript)", re.I)
+STOP_EXACT = re.compile(r"^\s*(?:Name|Email|Website|Comment|Subscribe|Subscribed|"
+                        r"Leave a Reply|Δ)\s*$", re.I)
+NOISE = re.compile(r"(?:document\.|getElementById|window\.|function\s*\()")
+MARKER = re.compile(r"^\s*(?:Δ|\*\s*\*\s*\*|◆|◇|※|—+)\s*$")
 HEAD_RE = re.compile(r"^Chapter\s+(.+?)\s+[–—-]\s+(.+)$")
 POV_RE = re.compile(r"\s*\(([^)]*?)\s+PoV\)$")
 NUMBER_RE = re.compile(r"^(?:[A-Za-z]+(?:[\s-][A-Za-z]+)*|\d+)$")
@@ -103,8 +108,12 @@ def parse_part(page):
         text = re.sub(r"[ \t]+", " ", text).strip()
         if not text:
             continue
-        if STOP.match(text):
+        if MARKER.match(text):
+            continue
+        if STOP.match(text) or STOP_EXACT.match(text):
             break
+        if NOISE.search(text):
+            continue
         out.append(text.replace("「", "“").replace("」", "”")
                     .replace("『", "‘").replace("』", "’"))
         out[-1] = re.sub(r"――+", "—", out[-1])
@@ -194,17 +203,20 @@ def main():
         if written:
             c["files"] = written
             text = "\n\n".join(open(p, encoding="utf-8").read().strip() for _, p, _ in written)
-            header = f"Chapter {c['word'].capitalize()}. {c['title']}.\n\n"
-            write_atomic(os.path.join(chapters_dir, f"{c['no']:04d}.txt"), header + text + "\n")
+            c["header"] = f"Chapter {c['word'].capitalize()}. {c['title']}."
+            write_atomic(os.path.join(chapters_dir, f"{c['no']:04d}.txt"),
+                         c["header"] + "\n\n" + text + "\n")
 
     book = {
         "slug": "shuukura-en",
         "title": "Story About Buying My Classmate Once A Week",
         "lang": "en",
-        "clean": "none",
+        "clean": "en",
         "source": {"type": "text", "index": TOC, "fetched_at": fetched_at},
         "segmentation": {"sent_end": ".!?;…", "clause_end": ",;:",
-                         "join_lines": " "},
+                         "join_lines": " ", "sent_pause": 0.45,
+                         "clause_pause": 0.22, "paragraph_pause": 0.75,
+                         "part_pause": 1.2},
         "unit_chars": 140,
         "chapters": [],
     }
@@ -214,6 +226,7 @@ def main():
             continue
         book["chapters"].append({
             "no": c["no"], "title": c["title"], "pov": c["pov"],
+            "header": c["header"],
             "parts": [{"part": part, "url": url, "file": os.path.relpath(path, args.book_dir),
                        "sha256": sha256_file(path)} for part, path, url in files],
         })

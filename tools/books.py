@@ -14,7 +14,25 @@ from html.parser import HTMLParser
 
 from text_prep import clean_chapter
 
-Chapter = namedtuple("Chapter", "no title text missing")
+Chapter = namedtuple("Chapter", "no title text missing parts", defaults=[None])
+
+NOISE_LINE = re.compile(r"(?m)^\s*(?:document\.|var\s|function\s*\(|window\.).*$")
+MARKER_LINE = re.compile(r"(?m)^[ \t]*[^\w\s]{1,6}[ \t]*$")
+
+
+def polish_en(text):
+    """朗读向前处理：去掉网页残留与装饰行，长破折号改成停顿（逗号）。"""
+    text = text.replace("\u00ad", "").replace("\u200b", "")
+    text = NOISE_LINE.sub("", text)
+    text = re.sub(r"(?m)^[ \t]*[–—][ \t]+", "", text)
+    text = re.sub(r"[ \t]*[–—][ \t]*", ", ", text)
+    text = MARKER_LINE.sub("", text)
+    text = re.sub(r"[*_]{1,3}(?=\w)|(?<=\w)[*_]{1,3}", "", text)
+    text = re.sub(r",\s*,+", ",", text)
+    text = re.sub(r",\s*([.!?;:])", r"\1", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
 class TextExtract(HTMLParser):
@@ -96,11 +114,25 @@ def _text_chapters(book_dir, spec):
     chapters = []
     for entry in spec["chapters"]:
         no = entry["no"]
-        path = os.path.join(book_dir, "chapters", f"{no:04d}.txt")
-        if not os.path.isfile(path):
-            raise SystemExit(f"missing chapter file: {path}")
-        with open(path, encoding="utf-8") as f:
-            chapters.append(Chapter(no, entry["title"], f.read(), False))
+        header = entry.get("header") or f"Chapter {no}. {entry['title']}."
+        part_files = entry.get("parts", [])
+        if part_files:
+            texts = [header]
+            for part in part_files:
+                path = os.path.join(book_dir, part["file"])
+                with open(path, encoding="utf-8") as f:
+                    raw = f.read()
+                texts.append(polish_en(raw) if spec.get("clean") == "en" else raw.strip())
+        else:
+            path = os.path.join(book_dir, "chapters", f"{no:04d}.txt")
+            if not os.path.isfile(path):
+                raise SystemExit(f"missing chapter file: {path}")
+            with open(path, encoding="utf-8") as f:
+                texts = None
+                text = f.read()
+            chapters.append(Chapter(no, entry["title"], text, False, None))
+            continue
+        chapters.append(Chapter(no, entry["title"], "\n\n".join(texts), False, texts))
     return chapters
 
 
@@ -113,7 +145,8 @@ def load_book(book_dir):
         sources = paths
     elif spec["source"]["type"] == "text":
         chapters = _text_chapters(book_dir, spec)
-        sources = sorted(glob.glob(os.path.join(book_dir, "chapters", "*.txt")))
+        sources = (sorted(glob.glob(os.path.join(book_dir, "chapters", "*.txt")))
+                   + sorted(glob.glob(os.path.join(book_dir, "parts", "*.txt"))))
     else:
         raise SystemExit(f"unknown source type: {spec['source']['type']}")
     spec["_source_files"] = sources

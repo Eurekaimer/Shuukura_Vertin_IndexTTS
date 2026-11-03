@@ -79,8 +79,9 @@ def _split_at_clauses(sent, max_chars, sent_end=SENT_END, clause_end=CLAUSE_END)
     return out
 
 
-def _pause_of(unit, clause_end=CLAUSE_END):
-    return PAUSE_CLAUSE if unit and unit[-1] in clause_end else PAUSE_SENT
+def _pause_of(unit, clause_end=CLAUSE_END, sent_pause=PAUSE_SENT,
+              clause_pause=PAUSE_CLAUSE):
+    return clause_pause if unit and unit[-1] in clause_end else sent_pause
 
 
 def _join(head, tail, sep):
@@ -89,9 +90,8 @@ def _join(head, tail, sep):
     return head + sep + tail
 
 
-def split_for_reading(text, max_chars=55, min_chars=12, sent_end=SENT_END,
-                      clause_end=CLAUSE_END, join_lines=""):
-    """返回 [(unit, pause_after_seconds), ...]。"""
+def _split_flat(text, max_chars, min_chars, sent_end, clause_end, join_lines,
+                sent_pause, clause_pause):
     flat = re.sub(r"\s*\n\s*", join_lines, text)
 
     phrases, buf = [], ""
@@ -114,7 +114,29 @@ def split_for_reading(text, max_chars=55, min_chars=12, sent_end=SENT_END,
         else:
             merged.append(ph)
 
-    units = [(u, _pause_of(u, clause_end)) for u in merged]
+    units = [(u, _pause_of(u, clause_end, sent_pause, clause_pause)) for u in merged]
+    if units:
+        units[-1] = (units[-1][0], 0.0)
+    return units
+
+
+def split_for_reading(text, max_chars=55, min_chars=12, sent_end=SENT_END,
+                      clause_end=CLAUSE_END, join_lines="",
+                      sent_pause=PAUSE_SENT, clause_pause=PAUSE_CLAUSE,
+                      paragraph_pause=0.0):
+    """返回 [(unit, pause_after_seconds), ...]。"""
+    if paragraph_pause <= 0:
+        return _split_flat(text, max_chars, min_chars, sent_end, clause_end,
+                           join_lines, sent_pause, clause_pause)
+
+    units = []
+    for para in re.split(r"\n\s*\n", text.strip()):
+        chunk = _split_flat(para, max_chars, min_chars, sent_end, clause_end,
+                            join_lines, sent_pause, clause_pause)
+        if not chunk:
+            continue
+        units.extend(chunk[:-1])
+        units.append((chunk[-1][0], paragraph_pause))
     if units:
         units[-1] = (units[-1][0], 0.0)
     return units
