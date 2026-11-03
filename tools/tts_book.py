@@ -31,7 +31,26 @@ from audio_clean import durable_replace, smooth_file  # noqa: E402
 from books import load_book  # noqa: E402
 from segmentation import split_for_reading  # noqa: E402
 
-PIPELINE_REVISION = 2
+PIPELINE_REVISION = 3
+
+
+def _wait_for_vram(cuda, device, min_free_mib):
+    """Wait until the GPU has enough free memory for the next operation."""
+    minimum = min_free_mib * 1024 * 1024
+    while True:
+        free, total = cuda.mem_get_info(device)
+        if minimum > total:
+            raise SystemExit(f"VRAM threshold {min_free_mib} MiB exceeds device capacity "
+                             f"{total // (1024 * 1024)} MiB")
+        if free >= minimum:
+            return
+        cuda.empty_cache()
+        free, _ = cuda.mem_get_info(device)
+        if free >= minimum:
+            return
+        print(f"GPU free {free // (1024 * 1024)} MiB < {min_free_mib} MiB; "
+              "waiting 30s for VRAM", flush=True)
+        time.sleep(30)
 
 
 def _checkpoint_namespace(args, model_dir, book_dir, spec):
@@ -109,6 +128,10 @@ def main():
     ap.add_argument("--lang", choices=["zh", "en"])
     ap.add_argument("--ref", default=REF_7S)
     ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--vram-load-min-mib", type=int, default=6000,
+                    help="minimum free GPU memory before loading the model (MiB)")
+    ap.add_argument("--vram-run-min-mib", type=int, default=768,
+                    help="minimum free GPU memory before inference (MiB)")
     ap.add_argument("--chapter-pause", type=float, default=1.0, help="章间静音秒数")
     ap.add_argument("--unit-chars", type=int, help="单次推理的朗读单元上限（字）")
     ap.add_argument("--interval-silence", type=int, default=350, help="句间静音毫秒（IndexTTS 参数）")
@@ -123,6 +146,8 @@ def main():
     ap.add_argument("--show-namespace", action="store_true",
                     help="print the checkpoint namespace digest and exit")
     args = ap.parse_args()
+    if args.vram_load_min_mib < 0 or args.vram_run_min_mib < 0:
+        ap.error("VRAM thresholds must not be negative")
 
     book_dir = os.path.abspath(args.book)
     spec, chapters = load_book(book_dir)
@@ -159,15 +184,20 @@ def main():
 
     import numpy as np
     import soundfile as sf
+    import torch
     sys.path.insert(0, os.path.join(REPO, "index-tts"))
     from indextts.infer_v2_5 import IndexTTS2
+
+    is_cuda = args.device.startswith("cuda")
+    if is_cuda:
+        _wait_for_vram(torch.cuda, args.device, args.vram_load_min_mib)
 
     t0 = time.time()
     tts = IndexTTS2(cfg_path=os.path.join(ckpt, "config.yaml"), model_dir=ckpt,
                     use_bf16=(args.device != "cpu"), use_cuda_kernel=False, device=args.device)
-    # 低显存模式会把 >40 字的文本再切成 40 字一段，而我们的朗读单元已经 ≤ unit-chars，
-    # 再切会打碎节奏并增加调用次数（实测 RTF 0.68 → 0.52）。关掉它。
-    tts.low_vram = False
+    # Conservative inference limits peak VRAM even if it adds segment boundaries.
+    tts.low_vram = is_cuda
+    reference_offloaded = False
     print(f"model loaded in {time.time() - t0:.1f}s on {args.device}")
 
     for entry in os.scandir(args.out_dir):
@@ -231,9 +261,21 @@ def main():
                 for ci, (chunk, pause) in enumerate(units):
                     seg_path = os.path.join(tmp, f"{ch_no:04d}_{pi:02d}_{ci:03d}.wav")
                     t1 = time.time()
+                    if is_cuda:
+                        _wait_for_vram(torch.cuda, args.device, args.vram_run_min_mib)
                     tts.infer(spk_audio_prompt=args.ref, text=chunk, lang=lang,
                               output_path=seg_path, interval_silence=args.interval_silence,
                               duration_factor=args.duration_factor, verbose=False)
+                    if is_cuda and not reference_offloaded:
+                        if tts.cache_spk_cond is None or tts.cache_emo_cond is None:
+                            raise RuntimeError("reference embeddings were not cached; cannot offload encoders")
+                        tts.semantic_model.to("cpu")
+                        tts.campplus_model.to("cpu")
+                        torch.cuda.empty_cache()
+                        reference_offloaded = True
+                        free, _ = torch.cuda.mem_get_info(args.device)
+                        print(f"reference encoders offloaded; GPU free {free // (1024 * 1024)} MiB",
+                              flush=True)
                     a, sr = sf.read(seg_path, dtype="float32")
                     os.remove(seg_path)
                     audio_parts.append(a)

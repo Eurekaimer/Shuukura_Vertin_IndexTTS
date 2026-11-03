@@ -13,7 +13,7 @@
 
 ```
 books/shuukura-zh/   book.json + source/*.epub       中文来源（仅对照）
-books/shuukura-en/   book.json + parts/ + chapters/  英文抓取结果（不入库）
+books/shuukura-en/   book.json + parts/ + chapters/ + extras/  英文来源（不入库）
 tools/               全部脚本：books / scrape_parts / tts_book / make_plan …
 assets/              ref_vertin_7s.wav, ref_vertin_20s.wav
 audiobook/           输出与断点检查点（不入库）
@@ -32,6 +32,7 @@ cd index-tts && uv sync --python 3.10      # 推理环境；不要加 --all-extr
 ```bash
 # 英文：抓取全部章节（可续跑，重复运行会跳过已下载的 part）
 uv run python tools/scrape_parts.py --chapters all
+uv run python tools/scrape_extras.py  # 抓取插话、番外及其他侧篇
 
 # 英文：整本推理，默认每章一个文件，输出 audiobook/shuukura-en/
 vertin-read
@@ -43,6 +44,8 @@ index-tts/.venv/bin/python tools/make_plan.py --book books/shuukura-en
 输出命名为 `ch0001.flac`、`ch0002.flac`：每个 web chapter 一个文件，音频内部按
 `parts/` 顺序拼接，part 之间插入 1.2 s 静音。每章先写检查点，校验 sha256 后才合并；
 中断或重启后重跑即可续，最多损失当前正在生成的那一章。
+正文结束后自动渲染插话和番外到 `audiobook/shuukura-en/extras/`，每篇一个文件；
+其在原目录中的位置记录在 `books/shuukura-en/extras/book.json` 的 `after_chapter`。
 
 中文如需重新生成（不推荐，会有辣条音）：
 
@@ -53,11 +56,13 @@ vertin-read --book "$PWD/books/shuukura-zh" --out-dir "$PWD/audiobook/shuukura-z
 
 ## 参数
 
-* 英文：`unit_chars=140`，`join_lines=" "`，句末 `.!?;…`，小句 `,;:`；
+* 英文书籍配置 `unit_chars=140`；启动器为了降低显存默认使用 80，长句优先在单词边界断开；
 * 英文停顿：句末 0.45 s，小句末 0.22 s，段末 0.75 s，part 之间 1.2 s，章间 1.0 s；
 * 中文：`unit_chars=70`，`join_lines=""`，句末 0.35 s、小句末 0.18 s；
 * 朗读润色：去掉网页/页脚残留与装饰行，括号式 en/em dash 改为逗号，行首破折号提示删除；
-* 显存峰值约 5.9 GB / 7.6 GB，只能单进程推理；`--device cpu` 可跑但慢约 20 倍。
+* 显存保护：加载前至少空闲 6000 MiB，推理前至少空闲 768 MiB；不足时每 30 秒检查一次。
+  CUDA 低显存分段开启，参考音频特征缓存后将对应编码器移回 CPU，释放显存。
+  阈值可通过 `--vram-load-min-mib`、`--vram-run-min-mib` 调整。
 
 ## 来源
 

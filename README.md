@@ -53,10 +53,12 @@ Shuukura_Vertin_IndexTTS/
 │   └── shuukura-en/
 │       ├── book.json              # scraped-text spec
 │       ├── parts/                 # raw scrape, one file per part (resume unit)
-│       └── chapters/              # chapter header + its parts joined
+│       ├── chapters/              # chapter header + its parts joined
+│       └── extras/                # TOC interludes, side stories and their book.json
 ├── tools/
 │   ├── books.py                   # book.json -> chapter list (EPUB or scraped text)
 │   ├── scrape_parts.py            # English chapters from Ave Lilium, resumable
+│   ├── scrape_extras.py           # interludes and side stories, resumable
 │   ├── vertin_ref.py              # single source of truth: reference audio + test text
 │   ├── text_prep.py               # chapter cleaning (metadata, notes, markers, quotes)
 │   ├── segmentation.py            # reading-oriented sentence/phrase splitting + pauses
@@ -101,9 +103,11 @@ uvx --with socksio --from huggingface_hub hf download IndexTeam/IndexTTS-2.5 --l
 
 * This machine routes through a SOCKS proxy; `hf` uses `httpx2`, so `--with socksio` is required.
 * First inference downloads w2v-bert-2.0 / MaskGCT codec / CAMPPlus / BigVGAN into `checkpoints/hf_cache/`.
-* **VRAM**: ~5.3 GB peak while loading, ~5.7 GB while inferring. On an 8 GB card, close other
-  GPU users first (a browser plus an editor hold ~0.8 GB and cause `CUBLAS_STATUS_ALLOC_FAILED`).
-  Falling back to `--device cpu` works but RTF drops from ~0.5 to ~9.
+* **VRAM**: the launcher requires 6,000 MiB free before loading, and waits below 768 MiB
+  free before each inference. CUDA low-VRAM splitting is enabled; the launcher uses
+  `--unit-chars 80`. Once reference embeddings are cached, the reference encoders are
+  moved to CPU to reclaim GPU memory. Override the thresholds with
+  `--vram-load-min-mib` and `--vram-run-min-mib`; closing other GPU users remains safest.
 
 ## Usage
 
@@ -133,6 +137,10 @@ redone. Each checkpoint and output has a checksum manifest and is committed atom
 keep the `.manifest.json` files with their audio. A chapter’s checkpoint is removed after
 its output file is safely written. Locks prevent concurrent jobs from sharing a checkpoint
 or output directory.
+The default run then renders the separate interludes and side stories into
+`audiobook/shuukura-en/extras/`, one file per entry. Their original TOC position is recorded
+as `after_chapter` in `books/shuukura-en/extras/book.json`. Explicit `--book`, `--out-dir`,
+`--start` or `--end` selects only that requested range and does not append extras.
 
 Chinese renders are deprecated (the reference voice produces the `辣条音` artifact on Chinese
 text); only the Chinese samples under `example/` are kept. The `books/shuukura-zh` spec still
@@ -167,11 +175,8 @@ index-tts/.venv/bin/python tools/make_plan.py \
 ```
 
 Writes `plan.json` — each chapter's text split into inference units with their pause
-lengths, plus source hashes — and `plan.txt`, one unit per line (`NNNN [iii] text`). Current
-Chinese output: 22,364 units over 427 readable chapters, 54 characters on average, and one
-unit that has to be cut without punctuation. Inference does not consume these files yet:
-switching to them changes the checkpoint namespace and would re-render finished chapters,
-so it should happen between passes, not mid-run.
+lengths, plus source hashes — and `plan.txt`, one unit per line (`NNNN [iii] text`).
+Inference splits the source itself and does not consume these files.
 
 ### Plain text with explicit pauses
 
@@ -187,8 +192,8 @@ The English fan translation (Ave Lilium) is scraped per part; each part file is 
 resume unit, and `chapters/` is rebuilt from the parts already on disk:
 
 ```bash
-uv run python tools/scrape_parts.py --chapters 1-2   # --dry-run lists chapters/parts only
-uv run python tools/scrape_parts.py --chapters 1-2 --force   # refetch existing parts
+uv run python tools/scrape_parts.py --chapters all
+uv run python tools/scrape_extras.py
 ```
 
 Then render with the same checkpoints and reference audio:
@@ -199,9 +204,10 @@ index-tts/.venv/bin/python tools/tts_book.py \
   --format flac --smooth --device cuda:0
 ```
 
-The English spec uses `unit_chars` 140, sentence endings `.!?;…`, clause endings `,;:`,
-`join_lines` `" "` so words never fuse across lines, and reading pauses of 0.45 s after a
-sentence, 0.22 s after a clause, 0.75 s after a paragraph and 1.2 s between web parts.
+The English spec uses `unit_chars` 140; the launcher overrides it to 80 for lower VRAM use.
+Sentence endings are `.!?;…`, clause endings `,;:`, with `join_lines` `" "`; long sentences
+prefer splitting at word boundaries. Reading pauses are 0.45 s after a sentence, 0.22 s
+after a clause, 0.75 s after a paragraph and 1.2 s between web parts.
 `books.load_book` also polishes the raw scrape for speech: web/footer residue and decorative
 lines are dropped, parenthetical en/em dashes become commas, leading dash cues are removed,
 and emphasis markers are stripped.
@@ -271,9 +277,9 @@ Configuration matters more than raw hardware. Measured on the same 6 reading uni
 | re-splitting off (our units are already <= unit-chars), 25 steps | 0.519 | 5.92 GB |
 | re-splitting off, 12 diffusion steps (`INDEXTTS_DIFFUSION_STEPS=12`) | 0.401 | 5.94 GB |
 
-The scripts disable the 40-character re-splitting automatically: chunking an already-correct
-reading unit breaks the pacing and adds calls. Diffusion steps stay at 25 for quality;
-`INDEXTTS_DIFFUSION_STEPS` is available if you want the extra ~23 %.
+The current CUDA book renderer enables the engine's low-VRAM re-splitting and offloads the
+reference encoders after caching their embeddings. This is safer on an 8 GB card but slower
+than the older no-re-splitting measurements above. Diffusion steps stay at 25 for quality.
 
 Running two workers in parallel is **not** possible on this card: peak is ~5.9 GB of 7.58 GB,
 so a second instance (5.3 GB) does not fit, and GPU utilisation already reaches 100 % with one

@@ -32,6 +32,7 @@ All generation code is in `../tools/`:
 |---|---|
 | `books.py` | `book.json` → chapter list (EPUB cleaning or scraped text) |
 | `scrape_parts.py` | English chapters from Ave Lilium, one resumable file per part |
+| `scrape_extras.py` | English interludes and side stories in TOC order |
 | `tts_book.py` | book → one audio file per N chapters, resumable |
 | `tts_read.py` | plain text → audio, per-sentence with explicit pauses |
 | `text_prep.py` | chapter cleaning: metadata, translator notes, duplicated titles, password pages |
@@ -42,12 +43,13 @@ All generation code is in `../tools/`:
 ```bash
 cd ~/Documents/GitHub/Shuukura_Vertin_IndexTTS
 
-# two-chapter B demo; keep the completed chapter checkpoints for the full run
-./bin/vertin-read --out-dir example --end 2 --keep-checkpoints
+# Chinese two-chapter B demo (the English version is recommended)
+./bin/vertin-read --book "$PWD/books/shuukura-zh" --out-dir example \
+  --end 2 --per-file 2 --unit-chars 70 --keep-checkpoints
 mv example/ch0001-0002.flac example/book_demo_ch01-02_B_smoothed.flac
 mv example/ch0001-0002.flac.manifest.json example/book_demo_ch01-02_B_smoothed.flac.manifest.json
 
-# the whole book, 20 chapters per file; repeat after stopping or rebooting
+# the English book, one chapter per file; repeat after stopping or rebooting
 ./bin/vertin-read
 
 # English audition: one file per chapter
@@ -57,7 +59,6 @@ index-tts/.venv/bin/python tools/tts_book.py --book books/shuukura-en \
 
 ## Notes
 
-* The chapter range in `audiobook/shuukura-zh/ch0001-0020.flac` keeps files in reading order.
 * Chapters 142, 169, 229, 270, 320 and 381 contain only password/placeholder pages in this EPUB;
   there is no story text to synthesize, so the script skips them.
 * The reference transcript was produced by Whisper; `tempests` is inferred (a `temp…` truncation in all

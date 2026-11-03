@@ -1,5 +1,5 @@
 #!/bin/sh
-# 渲染英文有声书；进程因信号崩溃（SIGSEGV/SIGABRT 等）时自动从检查点续跑。
+# 渲染英文正文及番外；进程因信号崩溃时自动从检查点续跑。
 # 中文整本仍可用：--book "$ROOT/books/shuukura-zh" --out-dir "$ROOT/audiobook/shuukura-zh" --per-file 20
 set -u
 
@@ -7,20 +7,42 @@ ROOT=$(dirname "$(dirname "$(readlink -f "$0")")")
 cd "$ROOT"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-attempt=0
-while :; do
-  attempt=$((attempt + 1))
-  "$ROOT/index-tts/.venv/bin/python" -u "$ROOT/tools/tts_book.py" \
-    --book "$ROOT/books/shuukura-en" --out-dir "$ROOT/audiobook/shuukura-en" \
-    --per-file 1 --format flac --duration-factor 1.0 --device cuda:0 --smooth "$@"
-  status=$?
-  [ "$status" -eq 0 ] && exit 0
-  # 只重试崩溃（>=128 表示被信号终止）；配置/参数错误直接退出，避免死循环。
-  if [ "$status" -lt 128 ] || [ "$attempt" -ge 100 ]; then
-    echo "vertin-read: exited with status $status" >&2
-    exit "$status"
-  fi
-  echo "vertin-read: crashed with status $status (attempt $attempt);" \
-       "resuming from checkpoints in 15s" >&2
-  sleep 15
+run_renderer() {
+  attempt=0
+  while :; do
+    attempt=$((attempt + 1))
+    "$ROOT/index-tts/.venv/bin/python" -u "$ROOT/tools/tts_book.py" "$@"
+    status=$?
+    [ "$status" -eq 0 ] && return 0
+    # 配置/参数错误直接退出；只重试被信号终止的进程。
+    if [ "$status" -lt 128 ] || [ "$attempt" -ge 100 ]; then
+      echo "vertin-read: exited with status $status" >&2
+      return "$status"
+    fi
+    echo "vertin-read: crashed with status $status (attempt $attempt);" \
+         "resuming from checkpoints in 15s" >&2
+    sleep 15
+  done
+}
+
+# Explicit ranges or books mean the caller selected a subset; do not append extras.
+extras=1
+for arg in "$@"; do
+  case "$arg" in
+    --book|--book=*|--out-dir|--out-dir=*|--start|--start=*|--end|--end=*|--show-namespace|--help|-h)
+      extras=0 ;;
+  esac
 done
+
+run_renderer --book "$ROOT/books/shuukura-en" --out-dir "$ROOT/audiobook/shuukura-en" \
+  --per-file 1 --unit-chars 80 --format flac --duration-factor 1.0 --device cuda:0 --smooth "$@" || exit $?
+
+if [ "$extras" -eq 1 ]; then
+  if [ ! -f "$ROOT/books/shuukura-en/extras/book.json" ]; then
+    echo "vertin-read: missing bonus book; run uv run python tools/scrape_extras.py" >&2
+    exit 1
+  fi
+  run_renderer --book "$ROOT/books/shuukura-en/extras" \
+    --out-dir "$ROOT/audiobook/shuukura-en/extras" \
+    --per-file 1 --unit-chars 80 --format flac --duration-factor 1.0 --device cuda:0 --smooth "$@" || exit $?
+fi
