@@ -6,7 +6,8 @@ index-tts/
 audiobook/
 
 # 第三方翻译文本，不入库
-buying-a-classmate-once-a-week/
+.venv/
+books/
 
 # Incomplete per-unit audio from interrupted demo generation
 example/.tmp/
@@ -14,6 +15,7 @@ example/.vertin.lock
 example/.vertin-tmp-*/
 example/*.manifest.json*
 !example/book_demo_ch01-02_B_smoothed.flac.manifest.json
+example/en_preview/
 
 __pycache__/
 *.pyc
