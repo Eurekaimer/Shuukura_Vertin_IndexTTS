@@ -24,8 +24,12 @@ cd index-tts && uv sync --python 3.10      # 推理环境；不要加 --all-extr
 ## 用法
 
 ```bash
+# 英文：默认整本，每章一个文件；抓取要先做
+vertin-read
+
 # 中文：续跑整本，20 章一个文件
-./bin/vertin-read
+vertin-read --book "$PWD/books/shuukura-zh" --out-dir "$PWD/audiobook/shuukura-zh" \
+  --per-file 20
 
 # 英文：抓两章（可续跑，重复运行会跳过已下载的 part）
 uv run python tools/scrape_parts.py --chapters 1-2

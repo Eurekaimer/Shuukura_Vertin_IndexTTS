@@ -116,31 +116,38 @@ Then start or resume from a terminal:
 vertin-read
 ```
 
-The launcher uses the original reference, normal speed, no pitch shift, the B smoothing
-filter and FLAC output. Chinese files are saved under `audiobook/shuukura-zh/` as
-`ch0001-0020.flac`, `ch0021-0040.flac`, and so on. Stop with Ctrl-C; after reboot run the
-same command. Completed chapters of the unfinished group are restored from
-`audiobook/shuukura-zh/.checkpoints/`; only the chapter interrupted mid-generation must be
+The launcher defaults to the English book: `books/shuukura-en/` →
+`audiobook/shuukura-en/`, one FLAC per chapter (`ch0001.flac`, `ch0002.flac`, …), with the
+original reference, normal speed, no pitch shift and the B smoothing filter. Stop with
+Ctrl-C; after reboot run the same command. Completed chapters are restored from
+`audiobook/shuukura-en/.checkpoints/`; only the chapter interrupted mid-generation must be
 redone. Each checkpoint and output has a checksum manifest and is committed atomically;
-keep the `.manifest.json` files with their audio. A group’s chapter checkpoints are removed
-after its final file is safely written. Locks prevent concurrent jobs from sharing a
-checkpoint or output directory.
+keep the `.manifest.json` files with their audio. A chapter’s checkpoint is removed after
+its output file is safely written. Locks prevent concurrent jobs from sharing a checkpoint
+or output directory.
+
+Chinese keeps its 20-chapter files and its own state:
+
+```bash
+vertin-read --book "$PWD/books/shuukura-zh" --out-dir "$PWD/audiobook/shuukura-zh" \
+  --per-file 20
+```
 
 The launcher restarts itself when a run dies from a signal (SIGSEGV, SIGABRT, …) and continues
 from the last verified chapter; ordinary errors such as a bad path still stop it. Observed
 crashes came from native code (`libcuda`, the FST text normalizer), not from the chapter text:
 all 22,364 reading units normalize without error in a clean process.
 
-The launcher reads `books/shuukura-zh/book.json`, which must match exactly one EPUB under
-`source/`. Changing the book spec, source text, reference, model, text processing,
-segmentation or generation settings starts a separate checkpoint set. Existing final files
-are skipped only when their settings and checksum match; otherwise the command stops without
-overwriting them. Use a separate output directory when intentionally generating a different
-version.
+The book comes from `book.json`: the Chinese spec must match exactly one EPUB under
+`source/`, the English spec lists the scraped chapters. Changing the book spec, source text,
+reference, model, text processing, segmentation or generation settings starts a separate
+checkpoint set. Existing final files are skipped only when their settings and checksum
+match; otherwise the command stops without overwriting them. Use a separate output directory
+when intentionally generating a different version.
 
-`./bin/vertin-read` also works without installing the symlink. Advanced options can be
-passed through to `tts_book.py`; use `vertin-read --help` to see them. `--book` and
-`--out-dir` override the Chinese defaults, so the same launcher renders the English book.
+`./bin/vertin-read` also works without installing the symlink. `--book`, `--out-dir` and
+`--per-file` override the defaults; advanced options pass through to `tts_book.py` (see
+`vertin-read --help`).
 
 ### Inspect the reading plan for every chapter
 

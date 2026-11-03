@@ -1,5 +1,6 @@
 #!/bin/sh
-# 渲染有声书；进程因信号崩溃（SIGSEGV/SIGABRT 等）时自动从检查点续跑。
+# 渲染英文有声书；进程因信号崩溃（SIGSEGV/SIGABRT 等）时自动从检查点续跑。
+# 中文整本仍可用：--book "$ROOT/books/shuukura-zh" --out-dir "$ROOT/audiobook/shuukura-zh" --per-file 20
 set -u
 
 ROOT=$(dirname "$(dirname "$(readlink -f "$0")")")
@@ -10,8 +11,8 @@ attempt=0
 while :; do
   attempt=$((attempt + 1))
   "$ROOT/index-tts/.venv/bin/python" -u "$ROOT/tools/tts_book.py" \
-    --book "$ROOT/books/shuukura-zh" --out-dir "$ROOT/audiobook/shuukura-zh" \
-    --per-file 20 --format flac --duration-factor 1.0 --device cuda:0 --smooth "$@"
+    --book "$ROOT/books/shuukura-en" --out-dir "$ROOT/audiobook/shuukura-en" \
+    --per-file 1 --format flac --duration-factor 1.0 --device cuda:0 --smooth "$@"
   status=$?
   [ "$status" -eq 0 ] && exit 0
   # 只重试崩溃（>=128 表示被信号终止）；配置/参数错误直接退出，避免死循环。
