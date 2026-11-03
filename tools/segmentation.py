@@ -24,7 +24,7 @@ PAUSE_SENT = 0.35
 PAUSE_CLAUSE = 0.18
 
 
-def _split_sentences(text):
+def _split_sentences(text, sent_end=SENT_END):
     out, cur, depth = [], "", 0
     for ch in text:
         if ch in OPEN_Q:
@@ -32,7 +32,7 @@ def _split_sentences(text):
         elif ch in CLOSE_Q and depth > 0:
             depth -= 1
         cur += ch
-        if depth == 0 and ch in SENT_END:
+        if depth == 0 and ch in sent_end:
             out.append(cur.strip())
             cur = ""
     if cur.strip():
@@ -40,7 +40,7 @@ def _split_sentences(text):
     return [s for s in out if s]
 
 
-def _split_at_clauses(sent, max_chars):
+def _split_at_clauses(sent, max_chars, sent_end=SENT_END, clause_end=CLAUSE_END):
     """单句过长时按小句标点切，再合并到 <= max_chars。"""
     parts, cur, depth = [], "", 0
     for ch in sent:
@@ -49,7 +49,7 @@ def _split_at_clauses(sent, max_chars):
         elif ch in CLOSE_Q and depth > 0:
             depth -= 1
         cur += ch
-        if depth == 0 and ch in CLAUSE_END:
+        if depth == 0 and ch in clause_end:
             parts.append(cur)
             cur = ""
     if cur:
@@ -67,7 +67,7 @@ def _split_at_clauses(sent, max_chars):
     out = []
     for m in merged or [sent]:
         while len(m) > max_chars:
-            cut = max((m.rfind(ch, 0, max_chars) for ch in SENT_END + CLAUSE_END), default=-1) + 1
+            cut = max((m.rfind(ch, 0, max_chars) for ch in sent_end + clause_end), default=-1) + 1
             if cut <= 0:
                 cut = max_chars
             while cut < len(m) and m[cut] in CLOSE_Q:
@@ -79,34 +79,42 @@ def _split_at_clauses(sent, max_chars):
     return out
 
 
-def _pause_of(unit):
-    return PAUSE_CLAUSE if unit and unit[-1] in CLAUSE_END else PAUSE_SENT
+def _pause_of(unit, clause_end=CLAUSE_END):
+    return PAUSE_CLAUSE if unit and unit[-1] in clause_end else PAUSE_SENT
 
 
-def split_for_reading(text, max_chars=55, min_chars=12):
+def _join(head, tail, sep):
+    if not head or not sep or head[-1].isspace() or tail[:1].isspace():
+        return head + tail
+    return head + sep + tail
+
+
+def split_for_reading(text, max_chars=55, min_chars=12, sent_end=SENT_END,
+                      clause_end=CLAUSE_END, join_lines=""):
     """返回 [(unit, pause_after_seconds), ...]。"""
-    flat = re.sub(r"\s*\n\s*", "", text)
+    flat = re.sub(r"\s*\n\s*", join_lines, text)
 
     phrases, buf = [], ""
-    for sent in _split_sentences(flat):
-        pieces = _split_at_clauses(sent, max_chars) if len(sent) > max_chars else [sent]
+    for sent in _split_sentences(flat, sent_end):
+        pieces = (_split_at_clauses(sent, max_chars, sent_end, clause_end)
+                  if len(sent) > max_chars else [sent])
         for piece in pieces:
             if buf and len(buf) + len(piece) > max_chars:
                 phrases.append(buf)
                 buf = piece
             else:
-                buf += piece
+                buf = _join(buf, piece, join_lines)
     if buf:
         phrases.append(buf)
 
     merged = []
     for ph in phrases:
         if merged and (len(ph) < min_chars or len(merged[-1]) < min_chars):
-            merged[-1] += ph
+            merged[-1] = _join(merged[-1], ph, join_lines)
         else:
             merged.append(ph)
 
-    units = [(u, _pause_of(u)) for u in merged]
+    units = [(u, _pause_of(u, clause_end)) for u in merged]
     if units:
         units[-1] = (units[-1][0], 0.0)
     return units

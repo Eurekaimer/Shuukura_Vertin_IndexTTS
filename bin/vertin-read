@@ -9,9 +9,8 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 attempt=0
 while :; do
   attempt=$((attempt + 1))
-  "$ROOT/index-tts/.venv/bin/python" -u "$ROOT/example/tts_book.py" \
-    --epub "$ROOT/buying-a-classmate-once-a-week/*.epub" \
-    --out-dir "$ROOT/audiobook" --checkpoint-dir "$ROOT/audiobook/.checkpoints" \
+  "$ROOT/index-tts/.venv/bin/python" -u "$ROOT/tools/tts_book.py" \
+    --book "$ROOT/books/shuukura-zh" --out-dir "$ROOT/audiobook/shuukura-zh" \
     --per-file 20 --format flac --duration-factor 1.0 --device cuda:0 --smooth "$@"
   status=$?
   [ "$status" -eq 0 ] && exit 0

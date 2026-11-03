@@ -19,11 +19,18 @@ class ReadingPlanTest(unittest.TestCase):
     def test_plan_splits_every_chapter_without_losing_text(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
-            epub = directory / "book.epub"
-            make_epub(epub)
+            (directory / "source").mkdir()
+            make_epub(directory / "source" / "book.epub")
+            (directory / "book.json").write_text(json.dumps({
+                "slug": "test-book", "title": "测试", "lang": "zh", "clean": "zh",
+                "source": {"type": "epub", "glob": "source/*.epub"},
+                "segmentation": {"sent_end": "。！？…!?;", "clause_end": "，、；：,:;",
+                                 "join_lines": ""},
+                "unit_chars": 70,
+            }), encoding="utf-8")
             subprocess.run(
-                [sys.executable, str(ROOT / "example" / "make_plan.py"),
-                 "--epub", str(epub), "--out-dir", str(directory / "plans"),
+                [sys.executable, str(ROOT / "tools" / "make_plan.py"),
+                 "--book", str(directory), "--out-dir", str(directory / "plans"),
                  "--unit-chars", "40"],
                 check=True, capture_output=True,
             )
