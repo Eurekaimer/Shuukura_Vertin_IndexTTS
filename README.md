@@ -104,6 +104,11 @@ has a checksum manifest and is committed atomically; keep the `.manifest.json` f
 their audio. A group’s chapter checkpoints are removed after its final file is safely
 written. Locks prevent concurrent jobs from sharing a checkpoint or output directory.
 
+The launcher restarts itself when a run dies from a signal (SIGSEGV, SIGABRT, …) and continues
+from the last verified chapter; ordinary errors such as a bad path still stop it. Observed
+crashes came from native code (`libcuda`, the FST text normalizer), not from the chapter text:
+all 22,364 reading units normalize without error in a clean process.
+
 The launcher expects exactly one EPUB in the source directory. Changing the EPUB,
 reference, model, text processing or generation settings starts a separate checkpoint
 set. Existing final files are skipped only when their settings and checksum match;
@@ -112,6 +117,20 @@ when intentionally generating a different version.
 
 `./bin/vertin-read` also works without installing the symlink. Advanced options can be
 passed through to `tts_book.py`; use `vertin-read --help` to see them.
+
+### Inspect the reading plan for every chapter
+
+```bash
+index-tts/.venv/bin/python example/make_plan.py \
+  --epub "buying-a-classmate-once-a-week/*.epub" --out-dir audiobook/plans
+```
+
+Writes `audiobook/plans/plan.json` — each chapter's cleaned text split into inference units
+with their pause lengths, plus source hashes — and `plan.txt`, one unit per line
+(`NNNN [iii] text`). Current output: 22,364 units over 427 readable chapters, 54 characters on
+average, and one unit that has to be cut without punctuation. Inference does not consume these
+files yet: switching to them changes the checkpoint namespace and would re-render finished
+chapters, so it should happen between passes, not mid-run.
 
 ### Plain text with explicit pauses
 
