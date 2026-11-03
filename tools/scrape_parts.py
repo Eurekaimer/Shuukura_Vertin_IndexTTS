@@ -17,6 +17,7 @@ import os
 import re
 import sys
 import time
+from html.parser import HTMLParser
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -27,10 +28,12 @@ UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/124 Safari/537.36")
 STOP = re.compile(r"^\s*(?:Credits?\b|If you enjoyed|Turn on JavaScript|"
                   r"<\s*Previous\s+Part|Previous\s+Part\s*\||Leave a Reply)", re.I)
-NAV = re.compile(r"(?:<\s*Previous\s+Part|Previous\s+Part\s*\||Next\s+Part\s*>)", re.I)
+NAV = re.compile(r"(?:<\s*Previous\s+(?:Part|Post)|Previous\s+(?:Part|Post)\s*\||"
+                 r"Next\s+(?:Part|Post)\s*>)", re.I)
 NOTE = re.compile(r"(?:Click here|Credits to|Next part will come|ePub for volume|"
                   r"available for download|Discord|Ko-Fi|Ko-fi|open to commissions|"
-                  r"Chapter debt|Thank you all for reading|next part will be coming|odd-numbered)", re.I)
+                  r"Chapter debt|Thank you all for reading|next part will be coming|odd-numbered|"
+                  r"featured as an exclusive purchase bonus|commissioning a translation)", re.I)
 STOP_EXACT = re.compile(r"^\s*(?:Name|Email|Website|Comment|Subscribe|Subscribed|"
                         r"Leave a Reply|Δ)\s*$", re.I)
 NOISE = re.compile(r"(?:document\.|getElementById|window\.|function\s*\()")
@@ -102,12 +105,60 @@ def parse_toc(page):
     return chapters
 
 
+class EntryParagraphs(HTMLParser):
+    """Collect only paragraphs inside the first entry-content container."""
+
+    def __init__(self):
+        super().__init__()
+        self.container = None
+        self.depth = 0
+        self.finished = False
+        self.current = None
+        self.skip = 0
+        self.paragraphs = []
+
+    def handle_starttag(self, tag, attrs):
+        if self.finished:
+            return
+        if self.container is None:
+            classes = (dict(attrs).get("class") or "").split()
+            if "entry-content" in classes:
+                self.container, self.depth = tag, 1
+            return
+        if tag == self.container:
+            self.depth += 1
+        if tag in ("script", "style"):
+            self.skip += 1
+        elif tag == "p":
+            self.current = []
+        elif tag == "br" and self.current is not None and not self.skip:
+            self.current.append("\n")
+
+    def handle_data(self, data):
+        if self.current is not None and not self.skip and not self.finished:
+            self.current.append(data)
+
+    def handle_endtag(self, tag):
+        if self.finished or self.container is None:
+            return
+        if tag in ("script", "style") and self.skip:
+            self.skip -= 1
+        elif tag == "p" and self.current is not None:
+            self.paragraphs.append("".join(self.current))
+            self.current = None
+        if tag == self.container:
+            self.depth -= 1
+            if not self.depth:
+                self.finished = True
+
+
 def parse_part(page):
-    body = page[page.index('class="entry-content'):]
+    parser = EntryParagraphs()
+    parser.feed(page)
+    if parser.container is None:
+        raise ValueError("entry-content container not found")
     out = []
-    for block in re.findall(r"<p[^>]*>(.*?)</p>", body, re.S):
-        text = re.sub(r"<br\s*/?>", "\n", block)
-        text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    for text in parser.paragraphs:
         text = text.replace("\u00a0", "")
         text = re.sub(r"[ \t]+", " ", text).strip()
         if not text:
